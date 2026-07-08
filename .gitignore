@@ -4,6 +4,6 @@ __pycache__/
 *.zip
 build/
 dist/
+test/
 hi/
 his/
-

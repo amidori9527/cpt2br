@@ -931,7 +931,16 @@ def prompt_with_default(label, default):
 
 
 def find_cpt_files(folder):
-    cpt_files = sorted(list(folder.glob("*.cpt")) + list(folder.glob("*.CPT")))
+    candidates = list(folder.glob("*.cpt")) + list(folder.glob("*.CPT"))
+    seen = set()
+    cpt_files = []
+    for path in candidates:
+        key = str(path.resolve()).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cpt_files.append(path)
+    cpt_files.sort()
     if not cpt_files:
         raise FileNotFoundError(f"目录下没有 .cpt 文件：{folder}")
     return cpt_files

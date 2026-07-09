@@ -32,6 +32,11 @@ BEE_GLOBAL_FUNCTIONS = {
     "value": "VALUE",
     "year": "year",
 }
+FORMULA_VARIABLES = {
+    "$$page_number": "$$pageInfo.currentPage",
+    "$$totalPage_number": "$$pageInfo.totalPage",
+    "$$reportName": "$$reportInfo.na",
+}
 
 
 def is_legal_ds_name(name):
@@ -327,6 +332,82 @@ def normalize_formula_equality(expression):
     return "".join(result)
 
 
+def prefix_formula_cell_refs(expression):
+    result = []
+    quote = None
+    index = 0
+    while index < len(expression):
+        ch = expression[index]
+        if quote:
+            result.append(ch)
+            if ch == "\\" and index + 1 < len(expression):
+                index += 1
+                result.append(expression[index])
+            elif ch == quote:
+                quote = None
+            index += 1
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+            result.append(ch)
+            index += 1
+            continue
+        if ch == "$" and index + 2 < len(expression) and expression[index + 1] == "$":
+            result.append("$$")
+            index += 2
+            continue
+        match = re.match(r"[A-Za-z]{1,3}[1-9]\d*", expression[index:])
+        if match:
+            end = index + len(match.group(0))
+            prev_ch = expression[index - 1] if index > 0 else ""
+            next_ch = expression[end] if end < len(expression) else ""
+            if not (prev_ch.isalnum() or prev_ch in ("_", "$")) and not (next_ch.isalnum() or next_ch == "_"):
+                result.append(f"$${match.group(0).upper()}")
+                index = end
+                continue
+        result.append(ch)
+        index += 1
+    return "".join(result)
+
+
+def normalize_formula_variables(expression):
+    result = []
+    quote = None
+    index = 0
+    variable_names = sorted(FORMULA_VARIABLES, key=len, reverse=True)
+    while index < len(expression):
+        ch = expression[index]
+        if quote:
+            result.append(ch)
+            if ch == "\\" and index + 1 < len(expression):
+                index += 1
+                result.append(expression[index])
+            elif ch == quote:
+                quote = None
+            index += 1
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+            result.append(ch)
+            index += 1
+            continue
+        matched = False
+        for name in variable_names:
+            if expression.startswith(name, index):
+                end = index + len(name)
+                next_ch = expression[end] if end < len(expression) else ""
+                if not (next_ch.isalnum() or next_ch == "_"):
+                    result.append(FORMULA_VARIABLES[name])
+                    index = end
+                    matched = True
+                    break
+        if matched:
+            continue
+        result.append(ch)
+        index += 1
+    return "".join(result)
+
+
 def transform_sql_expression(expression, used_functions):
     expression = rewrite_identifier_functions(expression, used_functions)
     return normalize_formula_equality(expression)
@@ -606,7 +687,10 @@ def parse_cell_value(c_node, ds_name_map):
 def normalize_formula(value):
     if value.startswith("="):
         used_functions = set()
-        return rewrite_identifier_functions(value[1:], used_functions)
+        expression = rewrite_identifier_functions(value[1:], used_functions)
+        expression = normalize_formula_equality(expression)
+        expression = normalize_formula_variables(expression)
+        return prefix_formula_cell_refs(expression)
     return value
 
 
@@ -695,9 +779,6 @@ def parse_report_reference(report, styles, ds_name_map):
                         "proxyCell": True,
                         "realCellPosition": {"row": row, "col": col},
                     }
-                    for key in ("expandDirection", "leftParentLattice", "topParentLattice"):
-                        if key in cell:
-                            proxy_cell[key] = cell[key]
                     meta.append(proxy_cell)
                     source[proxy_row][proxy_col] = None
 

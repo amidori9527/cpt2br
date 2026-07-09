@@ -79,6 +79,13 @@ def int_attr(node, name, default=0):
     return int(value) if value not in (None, "") else default
 
 
+def float_attr(node, name, default=0):
+    if node is None:
+        return default
+    value = node.attrib.get(name)
+    return float(value) if value not in (None, "") else default
+
+
 def fr_color_to_hex(value):
     if value is None:
         return None
@@ -681,6 +688,18 @@ def parse_cell_value(c_node, ds_name_map):
     if o_node.attrib.get("class") == "com.fr.base.Formula":
         return {"v": normalize_formula(text_of(o_node.find("./Attributes"))), "t": 1, "type": "formula"}
 
+    if o_node.attrib.get("class") == "com.fr.general.ImageWithSuffix":
+        image = o_node.find("./FineImage")
+        image_data = text_of(image.find("./IM")) if image is not None else ""
+        image_format = image.attrib.get("fm", "") if image is not None else ""
+        return {
+            "v": image_data,
+            "t": 1,
+            "contentType": "imageShape",
+            "image": {"fileId": "", "mode": "auto"},
+            "frImage": {"format": image_format, "data": image_data},
+        }
+
     return {"v": text_of(o_node), "t": 1}
 
 
@@ -727,6 +746,75 @@ def apply_expand(meta, c_node):
         meta["leftParentLattice"] = "default"
 
 
+def map_qrcode_correct_level(value):
+    return {
+        "0": "L",
+        "1": "M",
+        "2": "Q",
+        "3": "H",
+    }.get(value, "H")
+
+
+def map_barcode_format(value):
+    return {
+        "1": "CODE128",
+        "2": "EAN13",
+        "3": "CODE39",
+        "10": "CODE128",
+    }.get(value, "CODE39")
+
+
+def apply_content_type(meta, c_node, ds_name_map):
+    present = c_node.find("./Present")
+    present_class = present.attrib.get("class", "") if present is not None else ""
+
+    if present_class.endswith("BarcodePresent"):
+        barcode = present.find("./BarcodeAttr")
+        barcode_type = barcode.attrib.get("type", "") if barcode is not None else ""
+        if barcode_type == "16":
+            meta["contentType"] = "qrCode"
+            meta["qrcodeOptions"] = {
+                "width": 90,
+                "height": 90,
+                "colorDark": "#000000",
+                "colorLight": "#ffffff",
+                "margin": 10,
+                "correctLevel": map_qrcode_correct_level(barcode.attrib.get("RCodeErrorCorrect", "") if barcode is not None else ""),
+            }
+        else:
+            meta["contentType"] = "barCode"
+            meta["barcodeOptions"] = {
+                "displayValue": barcode.attrib.get("draw", "true") != "false" if barcode is not None else True,
+                "format": map_barcode_format(barcode_type),
+                "width": float_attr(barcode, "width", 2),
+                "height": float_attr(barcode, "height", 30),
+                "margin": 10,
+            }
+        return
+
+    if present_class.endswith("DictPresent"):
+        dictionary = present.find("./Dictionary")
+        dict_attr = dictionary.find("./FormulaDictAttr") if dictionary is not None else None
+        table_data_name = text_of(dictionary.find("./TableDataDictAttr/TableData/Name")) if dictionary is not None else ""
+        if dict_attr is None or not table_data_name:
+            return
+        meta["contentType"] = "dataDic"
+        meta["dataDicOptions"] = {
+            "type": "dataQuery",
+            "config": {
+                "actualColumnName": dict_attr.attrib.get("kiName", ""),
+                "dataSet": ds_name_map.get(table_data_name, table_data_name),
+                "showColumnName": dict_attr.attrib.get("viName", ""),
+            },
+        }
+        return
+
+    gui_attr = c_node.find("./CellGUIAttr")
+    if "contentType" not in meta and gui_attr is not None and gui_attr.attrib.get("showAsImage") == "true":
+        meta["contentType"] = "imageShape"
+        meta["image"] = {"fileId": "", "mode": "auto"}
+
+
 def parse_report_reference(report, styles, ds_name_map):
     row_values = parse_csv_ints(text_of(report.find("./RowHeight")))
     col_values = parse_csv_ints(text_of(report.find("./ColumnWidth")))
@@ -751,6 +839,7 @@ def parse_report_reference(report, styles, ds_name_map):
 
         cell = {"row": row, "col": col}
         cell.update(parse_cell_value(c_node, ds_name_map))
+        apply_content_type(cell, c_node, ds_name_map)
         style_index = c_node.attrib.get("s")
         if style_index is not None and int(style_index) < len(styles):
             cell["s"] = styles[int(style_index)]
